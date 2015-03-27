@@ -39,7 +39,7 @@ char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 int binary = 0, cbow = 1, debug_mode = 2, window = 5, min_count = 5, num_threads = 12, min_reduce = 1;
 int *vocab_hash;
-long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
+long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100, sentence_vectors = 0;
 long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, sample = 1e-3;
 real *syn0, *syn1, *syn1neg, *expTable;
@@ -141,6 +141,16 @@ int VocabCompare(const void *a, const void *b) {
     return ((struct vocab_word *)b)->cn - ((struct vocab_word *)a)->cn;
 }
 
+int IsUnUsed(const char *s) {
+    return strlen(s) > 4 && s[0] == '@' && s[1] == '@'
+            && s[2] == 'S' && s[3] == 'E';
+}
+
+int IsUsed(const char *s) {
+    return strlen(s) > 4 && s[0] == '@' && s[1] == '@'
+            && s[2] == 'S' && s[3] == 'S';
+}
+
 // Sorts the vocabulary by frequency using word counts
 void SortVocab() {
   int a, size;
@@ -175,7 +185,8 @@ void SortVocab() {
 void ReduceVocab() {
   int a, b = 0;
   unsigned int hash;
-  for (a = 0; a < vocab_size; a++) if (vocab[a].cn > min_reduce) {
+  for (a = 0; a < vocab_size; a++) if (vocab[a].cn > min_reduce ||
+          IsUsed(vocab[a].word)) {
     vocab[b].cn = vocab[a].cn;
     vocab[b].word = vocab[a].word;
     b++;
@@ -278,6 +289,10 @@ void LearnVocabFromTrainFile() {
     if ((debug_mode > 1) && (train_words % 100000 == 0)) {
       printf("%lldK%c", train_words / 1000, 13);
       fflush(stdout);
+    }
+    // skip un-used sentences
+    if (IsUnUsed(word)) {
+        continue;
     }
     i = SearchVocab(word);
     if (i == -1) {
@@ -426,7 +441,14 @@ void *TrainModelThread(void *id) {
         c = sentence_position - window + a;
         if (c < 0) continue;
         if (c >= sentence_length) continue;
+        if (sentence_vectors && (c == 0)) continue;
         last_word = sen[c];
+        if (last_word == -1) continue;
+        for (c = 0; c < layer1_size; c++) neu1[c] += syn0[c + last_word * layer1_size];
+        cw++;
+      }
+      if (sentence_vectors) {
+        last_word = sen[0];
         if (last_word == -1) continue;
         for (c = 0; c < layer1_size; c++) neu1[c] += syn0[c + last_word * layer1_size];
         cw++;
@@ -474,14 +496,21 @@ void *TrainModelThread(void *id) {
           c = sentence_position - window + a;
           if (c < 0) continue;
           if (c >= sentence_length) continue;
+          if (sentence_vectors && (c == 0)) continue;
           last_word = sen[c];
+          if (last_word == -1) continue;
+          for (c = 0; c < layer1_size; c++) syn0[c + last_word * layer1_size] += neu1e[c];
+        }
+        if (sentence_vectors) {
+          last_word = sen[0];
           if (last_word == -1) continue;
           for (c = 0; c < layer1_size; c++) syn0[c + last_word * layer1_size] += neu1e[c];
         }
       }
     } else {  //train skip-gram
-      for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+      for (a = b; a < window * 2 + 1 + sentence_vectors - b; a++) if (a != window) {
         c = sentence_position - window + a;
+        if (sentence_vectors) if (a >= window * 2 + sentence_vectors - b) c = 0;
         if (c < 0) continue;
         if (c >= sentence_length) continue;
         last_word = sen[c];
@@ -665,6 +694,9 @@ int main(int argc, char **argv) {
     printf("\t\tThe vocabulary will be read from <file>, not constructed from the training data\n");
     printf("\t-cbow <int>\n");
     printf("\t\tUse the continuous bag of words model; default is 1 (use 0 for skip-gram model)\n");
+    printf("\t-sentence-vectors <int>\n");
+    printf("\t\tAssume the first token at the beginning of each line is a sentence ID. This token will be trained\n");
+    printf("\t\twith full sentence context instead of just the window. Use 1 to turn on.\n");
     printf("\nExamples:\n");
     printf("./word2vec -train data.txt -output vec.txt -size 200 -window 5 -sample 1e-4 -negative 5 -hs 0 -binary 0 -cbow 1 -iter 3\n\n");
     return 0;
@@ -690,6 +722,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-iter", argc, argv)) > 0) iter = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-sentence-vectors", argc, argv)) > 0) sentence_vectors = atoi(argv[i + 1]);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
