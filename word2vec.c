@@ -186,7 +186,7 @@ void ReduceVocab() {
   int a, b = 0;
   unsigned int hash;
   for (a = 0; a < vocab_size; a++) if (vocab[a].cn > min_reduce ||
-          IsUsed(vocab[a].word)) {
+          (sentence_vectors && IsUsed(vocab[a].word))) {
     vocab[b].cn = vocab[a].cn;
     vocab[b].word = vocab[a].word;
     b++;
@@ -291,7 +291,7 @@ void LearnVocabFromTrainFile() {
       fflush(stdout);
     }
     // skip un-used sentences
-    if (IsUnUsed(word)) {
+    if (sentence_vectors && IsUnUsed(word)) {
         continue;
     }
     i = SearchVocab(word);
